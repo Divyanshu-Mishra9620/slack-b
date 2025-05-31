@@ -191,17 +191,23 @@ app.get("/auth/slack/callback", async (req, res) => {
 
     res.cookie("slack_access_token", response.data.access_token, {
       httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      domain: "slack-b.onrender.com",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      domain:
+        process.env.NODE_ENV === "production"
+          ? "slack-b.onrender.com"
+          : "localhost",
       path: "/",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
     res.cookie("slack_auth_visible", "true", {
       secure: true,
-      sameSite: "none",
-      domain: "slack-f.vercel.app",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      domain:
+        process.env.NODE_ENV === "production"
+          ? "slack-f.vercel.com"
+          : "localhost",
       maxAge: 30 * 24 * 60 * 60 * 1000,
       path: "/",
     });
@@ -223,6 +229,18 @@ app.get("/auth/slack/callback", async (req, res) => {
       )}`
     );
   }
+});
+
+app.get("/env-check", (req, res) => {
+  res.json({
+    env: process.env.NODE_ENV,
+    cookieDomain:
+      process.env.NODE_ENV === "production"
+        ? "slack-b.onrender.com"
+        : "localhost",
+    frontendUrl: process.env.VITE_FRONTEND_URI,
+    usingHttps: req.secure,
+  });
 });
 
 app.get("/auth/logout", (req, res) => {
