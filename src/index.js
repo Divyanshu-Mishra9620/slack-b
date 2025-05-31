@@ -53,13 +53,7 @@ app.use(
       "X-Requested-With",
       "Pragma",
     ],
-    headers: [
-      "Access-Control-Allow-Credentials",
-      "true",
-      "Access-Control-Allow-Origin",
-      "https://slack-f.vercel.app",
-    ],
-    exposedHeaders: ["set-cookie"],
+    exposedHeaders: [],
   })
 );
 
@@ -194,32 +188,21 @@ app.get("/auth/slack/callback", async (req, res) => {
       throw new Error(response.data.error || "Slack API error");
     }
 
-    res.cookie("slack_access_token", response.data.access_token, {
+    const accessTokenCookieOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      domain:
-        process.env.NODE_ENV === "production"
-          ? "slack-b.onrender.com"
-          : "localhost",
-      path: "/",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
-
-    res.cookie("slack_auth_visible", "true", {
       secure: true,
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      domain:
-        process.env.NODE_ENV === "production"
-          ? "slack-f.vercel.com"
-          : "localhost",
+      sameSite: "none",
+      path: "/",
       maxAge: 30 * 24 * 60 * 60 * 1000,
-      path: "/",
-    });
-    res.clearCookie("slack_auth_state", {
-      domain: "slack-b.onrender.com",
-      path: "/",
-    });
+    };
+
+    res.cookie(
+      "slack_access_token",
+      response.data.access_token,
+      accessTokenCookieOptions
+    );
+
+    res.clearCookie("slack_access_token", accessTokenCookieOptions);
 
     res.redirect(`${FRONTEND_URI}/?auth_success=1`);
   } catch (error) {
