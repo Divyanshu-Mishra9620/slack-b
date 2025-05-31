@@ -29,9 +29,17 @@ const SCOPE = "chat:write,chat:write.public,channels:history,groups:history";
 
 app.use(cookieParser());
 
+const allowedOrigins = ["http://localhost:5173", "https://slack-f.vercel.app"];
+
 app.use(
   cors({
-    origin: FRONTEND_URI || "http://localhost:5173",
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Origin"],
