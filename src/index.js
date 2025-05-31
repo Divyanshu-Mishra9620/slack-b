@@ -163,6 +163,27 @@ app.get("/auth/slack/callback", async (req, res) => {
     return res.status(400).send("Invalid state parameter");
   }
 
+  app.get("/auth/refresh", async (req, res) => {
+    const token = req.cookies.slack_access_token;
+    if (!token) return res.status(401).json({ error: "No token" });
+
+    try {
+      const slack = new WebClient(token);
+      const authTest = await slack.auth.test();
+
+      res.json({
+        token,
+        user: {
+          id: authTest.user_id,
+          team: authTest.team,
+        },
+      });
+    } catch (error) {
+      res.clearCookie("slack_access_token");
+      res.status(401).json({ error: "Token refresh failed" });
+    }
+  });
+
   try {
     const response = await axios.post(
       "https://slack.com/api/oauth.v2.access",
@@ -190,7 +211,7 @@ app.get("/auth/slack/callback", async (req, res) => {
 
     const accessTokenCookieOptions = {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "none",
       path: "/",
       maxAge: 30 * 24 * 60 * 60 * 1000,
