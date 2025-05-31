@@ -27,7 +27,7 @@ const SLACK_REDIRECT_URI = process.env.SLACK_REDIRECT_URI;
 const FRONTEND_URI = process.env.VITE_FRONTEND_URI;
 
 const SCOPE =
-  "chat:write,chat:write.public,channels:history,groups:history,identity.basic";
+  "chat:write,chat:write.public,channels:history,groups:history,users:read";
 
 app.use(cookieParser());
 
@@ -79,22 +79,39 @@ app.get("/auth/status", async (req, res) => {
 
   try {
     const slack = new WebClient(token);
-    const response = await slack.auth.test();
-    console.log("Auth status check:", {
-      cookies: req.cookies,
-      tokenPresent: !!token,
-      authTestResponse: response,
+    const authTest = await slack.auth.test();
+    const userInfo = await slack.users.info({
+      user: authTest.user_id,
     });
-
     res.json({
       authenticated: true,
       user: {
-        id: response.user_id,
-        name: response.user,
-        team: response.team,
-        image: `https://avatars.slack-edge.com/${response.user_id}`,
+        id: authTest.user_id,
+        name: userInfo.user.real_name || userInfo.user.name,
+        team: authTest.team,
+        image:
+          userInfo.user.profile?.image_512 ||
+          userInfo.user.profile?.image_192 ||
+          `https://avatars.slack-edge.com/${authTest.user_id}`,
       },
     });
+
+    // const response = await slack.auth.test();
+    // console.log("Auth status check:", {
+    //   cookies: req.cookies,
+    //   tokenPresent: !!token,
+    //   authTestResponse: response,
+    // });
+
+    // res.json({
+    //   authenticated: true,
+    //   user: {
+    //     id: response.user_id,
+    //     name: response.user,
+    //     team: response.team,
+    //     image: `https://avatars.slack-edge.com/${response.user_id}`,
+    //   },
+    // });
   } catch (error) {
     res.clearCookie("slack_access_token");
     res.json({ authenticated: false });
@@ -121,6 +138,7 @@ app.get("/auth/slack", (req, res) => {
       scope: SCOPE,
       redirect_uri: SLACK_REDIRECT_URI,
       state: state,
+      user_scope: "",
     }
   )}`;
   res.redirect(authUrl);
@@ -167,7 +185,7 @@ app.get("/auth/slack/callback", async (req, res) => {
       domain:
         process.env.NODE_ENV === "production"
           ? "slack-b.onrender.com"
-          : "localhost:5000",
+          : undefined,
       maxAge: 30 * 24 * 60 * 60 * 1000,
       path: "/",
     });
@@ -178,7 +196,7 @@ app.get("/auth/slack/callback", async (req, res) => {
       domain:
         process.env.NODE_ENV === "production"
           ? "slack-f.vercel.app"
-          : "localhost:5173",
+          : undefined,
       maxAge: 30 * 24 * 60 * 60 * 1000,
       path: "/",
     });
