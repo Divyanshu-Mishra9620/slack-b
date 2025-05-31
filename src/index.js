@@ -78,7 +78,10 @@ app.get("/auth/slack", (req, res) => {
   const state = Math.random().toString(36).substring(7);
   res.cookie("slack_auth_state", state, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: true,
+    sameSite: "none",
+    domain: process.env.NODE_ENV === "production" ? ".onrender.com" : undefined,
+    maxAge: 60000,
   });
 
   const authUrl = `https://slack.com/oauth/v2/authorize?${querystring.stringify(
@@ -121,12 +124,14 @@ app.get("/auth/slack/callback", async (req, res) => {
     const { access_token, authed_user } = response.data;
     res.cookie("slack_access_token", access_token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+      secure: true,
+      sameSite: "none",
+      domain:
+        process.env.NODE_ENV === "production" ? ".onrender.com" : undefined,
+      maxAge: 1000 * 60 * 60 * 24 * 30,
     });
-
-    // Redirect to frontend with success message
-    res.redirect(`${FRONTEND_URI}/?auth_success=1`);
+    res.clearCookie("slack_auth_state");
+    res.redirect(`${FRONTEND_URI}/?auth_success=1&slack_auth=complete`);
   } catch (error) {
     console.error("OAuth Error:", error.response?.data || error.message);
     res.redirect(`${FRONTEND_URI}/?auth_error=1`);
