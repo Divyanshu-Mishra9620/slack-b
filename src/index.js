@@ -51,12 +51,6 @@ app.use(
       "Cache-Control",
       "Accept",
       "X-Requested-With",
-    ], // Add other headers as needed
-    headers: [
-      "Access-Control-Allow-Credentials",
-      "true",
-      "Access-Control-Allow-Origin",
-      "https://slack-f.vercel.app",
     ],
     exposedHeaders: ["set-cookie"],
   })
@@ -75,6 +69,18 @@ app.get("/health", (req, res) => {
 });
 
 app.options("*", cors());
+
+app.get("/auth/debug", (req, res) => {
+  res.json({
+    cookies: req.cookies,
+    headers: req.headers,
+    env: {
+      CLIENT_ID: !!CLIENT_ID,
+      REDIRECT_URI: SLACK_REDIRECT_URI,
+      FRONTEND_URI: FRONTEND_URI,
+    },
+  });
+});
 
 app.get("/auth/status", async (req, res) => {
   const token = req.cookies.slack_access_token;
@@ -126,10 +132,7 @@ app.get("/auth/slack", (req, res) => {
     httpOnly: true,
     secure: true,
     sameSite: "none",
-    domain:
-      process.env.NODE_ENV === "production"
-        ? "slack-b.onrender.com"
-        : undefined,
+    domain: "slack-b.onrender.com",
     maxAge: 60000,
     path: "/",
   });
@@ -147,7 +150,7 @@ app.get("/auth/slack", (req, res) => {
 });
 
 app.get("/auth/slack/callback", async (req, res) => {
-  const { code, state } = req.query;
+  const { code, state, error } = req.query;
 
   if (error) {
     console.error("Slack OAuth error:", error);
@@ -200,23 +203,17 @@ app.get("/auth/slack/callback", async (req, res) => {
       path: "/",
     });
 
-    // res.cookie("slack_auth_visible", "true", {
-    //   secure: true,
-    //   sameSite: "none",
-    //   domain:
-    //     process.env.NODE_ENV === "production"
-    //       ? "slack-f.vercel.app"
-    //       : undefined,
-    //   maxAge: 30 * 24 * 60 * 60 * 1000,
-    //   path: "/",
-    // });
-    // res.clearCookie("slack_auth_state", {
-    //   domain:
-    //     process.env.NODE_ENV === "production"
-    //       ? "slack-b.onrender.com"
-    //       : undefined,
-    //   path: "/",
-    // });
+    res.cookie("slack_auth_visible", "true", {
+      secure: true,
+      sameSite: "none",
+      domain: "slack-f.vercel.app",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+      path: "/",
+    });
+    res.clearCookie("slack_auth_state", {
+      domain: "slack-b.onrender.com",
+      path: "/",
+    });
 
     res.redirect(`${FRONTEND_URI}/?auth_success=1`);
   } catch (error) {
