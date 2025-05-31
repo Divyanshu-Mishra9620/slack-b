@@ -231,6 +231,14 @@ app.get("/auth/slack/callback", async (req, res) => {
   }
 });
 
+app.get("/cookie-test", (req, res) => {
+  res.json({
+    cookiesReceived: req.cookies,
+    headers: req.headers["cookie"],
+    env: process.env.NODE_ENV,
+  });
+});
+
 app.get("/env-check", (req, res) => {
   res.json({
     env: process.env.NODE_ENV,
@@ -245,14 +253,18 @@ app.get("/env-check", (req, res) => {
 
 app.get("/auth/logout", (req, res) => {
   res.clearCookie("slack_access_token", {
-    domain: "slack-b.onrender.com",
+    domain:
+      process.env.NODE_ENV === "production"
+        ? "slack-b.onrender.com"
+        : undefined,
     path: "/",
   });
   res.clearCookie("slack_auth_visible", {
-    domain: "slack-f.vercel.app",
+    domain:
+      process.env.NODE_ENV === "production" ? "slack-f.vercel.app" : undefined,
     path: "/",
   });
-  res.redirect(`${FRONTEND_URI}/?logout_success=1`);
+  res.json({ success: true });
 });
 
 app.use(
