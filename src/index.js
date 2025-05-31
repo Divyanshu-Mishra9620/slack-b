@@ -29,20 +29,29 @@ const SCOPE = "chat:write,chat:write.public,channels:history,groups:history";
 
 app.use(cookieParser());
 app.use(
-  morgan(":method :url :status :res[content-length] - :response-time ms")
-);
-app.use(express.json());
-
-app.use(
   cors({
     origin: FRONTEND_URI || "http://localhost:5173",
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Origin"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+    ],
   })
 );
 
-app.options("*", cors());
+app.options("*", (req, res) => {
+  res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.sendStatus(200);
+});
+
+app.use(express.json());
+app.use(morgan("dev"));
 
 app.use((req, res, next) => {
   console.log("Incoming cookies:", req.cookies);
@@ -100,8 +109,8 @@ app.get("/auth/slack", (req, res) => {
 });
 
 app.get("/auth/slack/callback", async (req, res) => {
-  console.log("Received cookies:", req.cookies); // Debug
-  console.log("Query params:", req.query); // Debug
+  console.log("Received cookies:", req.cookies);
+  console.log("Query params:", req.query);
   const { code, state } = req.query;
   const storedState = req.cookies.slack_auth_state;
 
