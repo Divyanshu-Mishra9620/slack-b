@@ -28,6 +28,10 @@ const FRONTEND_URI = process.env.VITE_FRONTEND_URI;
 const SCOPE = "chat:write,chat:write.public,channels:history,groups:history";
 
 app.use(cookieParser());
+app.use(
+  morgan(":method :url :status :res[content-length] - :response-time ms")
+);
+app.use(express.json());
 
 app.use(
   cors({
@@ -39,6 +43,11 @@ app.use(
 );
 
 app.options("*", cors());
+
+app.use((req, res, next) => {
+  console.log("Incoming cookies:", req.cookies);
+  next();
+});
 
 app.get("/auth/status", async (req, res) => {
   const token = req.cookies.slack_access_token;
@@ -71,6 +80,10 @@ app.get("/auth/slack", (req, res) => {
   res.cookie("slack_auth_state", state, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
+    sameSite: "none",
+    domain: ".onrender.com",
+    path: "/auth/slack/callback",
+    maxAge: 1000 * 60 * 5,
   });
 
   const authUrl = `https://slack.com/oauth/v2/authorize?${querystring.stringify(
@@ -87,10 +100,17 @@ app.get("/auth/slack", (req, res) => {
 });
 
 app.get("/auth/slack/callback", async (req, res) => {
+  console.log("Received cookies:", req.cookies); // Debug
+  console.log("Query params:", req.query); // Debug
   const { code, state } = req.query;
   const storedState = req.cookies.slack_auth_state;
 
   if (!storedState || storedState !== state) {
+    console.error("State mismatch!", {
+      stored: storedState,
+      received: state,
+      allCookies: req.cookies,
+    });
     return res.status(400).send("Invalid state parameter");
   }
 
@@ -114,10 +134,9 @@ app.get("/auth/slack/callback", async (req, res) => {
     res.cookie("slack_access_token", access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+      maxAge: 1000 * 60 * 60 * 24 * 30,
     });
 
-    // Redirect to frontend with success message
     res.redirect(`${FRONTEND_URI}/?auth_success=1`);
   } catch (error) {
     console.error("OAuth Error:", error.response?.data || error.message);
@@ -129,12 +148,6 @@ app.get("/auth/logout", (req, res) => {
   res.clearCookie("slack_access_token");
   res.redirect(`${FRONTEND_URI}/?logout_success=1`);
 });
-
-app.use(
-  morgan(":method :url :status :res[content-length] - :response-time ms")
-);
-
-app.use(express.json());
 
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
