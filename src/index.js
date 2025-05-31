@@ -81,6 +81,8 @@ app.get("/auth/status", async (req, res) => {
   const token = req.cookies.slack_access_token;
 
   if (!token) {
+    console.log("No token found");
+
     return res.json({ authenticated: false });
   }
 
@@ -88,6 +90,9 @@ app.get("/auth/status", async (req, res) => {
     const slack = new WebClient(token);
     const authTest = await slack.auth.test();
     console.log("Auth test success:", authTest);
+    if (!authTest.ok) {
+      throw new Error("Slack API returned invalid auth");
+    }
     const userInfo = await slack.users.info({
       user: authTest.user_id,
     });
