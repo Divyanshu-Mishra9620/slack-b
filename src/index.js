@@ -51,9 +51,8 @@ app.use(
       "Cache-Control",
       "Accept",
       "X-Requested-With",
-      "Pragma",
     ],
-    exposedHeaders: [],
+    exposedHeaders: ["set-cookie"],
   })
 );
 
@@ -143,6 +142,26 @@ app.get("/auth/slack", (req, res) => {
   res.redirect(authUrl);
 });
 
+app.get("/auth/refresh", async (req, res) => {
+  const token = req.cookies.slack_access_token;
+  if (!token) return res.status(401).json({ error: "No token" });
+
+  try {
+    const slack = new WebClient(token);
+    const authTest = await slack.auth.test();
+
+    res.json({
+      token,
+      user: {
+        id: authTest.user_id,
+        team: authTest.team,
+      },
+    });
+  } catch (error) {
+    res.status(401).json({ error: "Token refresh failed" });
+  }
+});
+
 app.get("/auth/slack/callback", async (req, res) => {
   const { code, state, error } = req.query;
 
@@ -159,30 +178,10 @@ app.get("/auth/slack/callback", async (req, res) => {
     console.error("State mismatch", {
       received: state,
       expected: req.cookies.slack_auth_state,
+      cookies: req.cookies,
     });
-    return res.status(400).send("Invalid state parameter");
+    return res.redirect(`${FRONTEND_URI}/?auth_error=1&reason=state_mismatch`);
   }
-
-  app.get("/auth/refresh", async (req, res) => {
-    const token = req.cookies.slack_access_token;
-    if (!token) return res.status(401).json({ error: "No token" });
-
-    try {
-      const slack = new WebClient(token);
-      const authTest = await slack.auth.test();
-
-      res.json({
-        token,
-        user: {
-          id: authTest.user_id,
-          team: authTest.team,
-        },
-      });
-    } catch (error) {
-      res.clearCookie("slack_access_token");
-      res.status(401).json({ error: "Token refresh failed" });
-    }
-  });
 
   try {
     const response = await axios.post(
@@ -197,7 +196,11 @@ app.get("/auth/slack/callback", async (req, res) => {
     );
     if (!response.data.ok) {
       console.error("Slack API Error:", response.data.error);
-      return res.redirect(`${FRONTEND_URI}/?auth_error=1`);
+      return res.redirect(
+        `${FRONTEND_URI}/?auth_error=1&reason=${encodeURIComponent(
+          response.data.error || "slack_api_error"
+        )}`
+      );
     }
 
     console.log(
@@ -223,7 +226,10 @@ app.get("/auth/slack/callback", async (req, res) => {
       accessTokenCookieOptions
     );
 
-    res.clearCookie("slack_access_token", accessTokenCookieOptions);
+    res.clearCookie("slack_auth_state", {
+      ...accessTokenCookieOptions,
+      httpOnly: true,
+    });
 
     res.redirect(`${FRONTEND_URI}/?auth_success=1`);
   } catch (error) {
