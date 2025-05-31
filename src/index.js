@@ -46,6 +46,18 @@ app.use(
   })
 );
 
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    cookies: req.cookies,
+    env: {
+      NODE_ENV: NODE_ENV,
+      CLIENT_ID: !!CLIENT_ID,
+      REDIRECT_URI: REDIRECT_URI,
+    },
+  });
+});
+
 app.options("*", cors());
 
 app.get("/auth/status", async (req, res) => {
@@ -80,8 +92,12 @@ app.get("/auth/slack", (req, res) => {
     httpOnly: true,
     secure: true,
     sameSite: "none",
-    domain: process.env.NODE_ENV === "production" ? ".onrender.com" : undefined,
+    domain:
+      process.env.NODE_ENV === "production"
+        ? "slack-b.onrender.com"
+        : undefined,
     maxAge: 60000,
+    path: "/auth/slack/callback",
   });
 
   const authUrl = `https://slack.com/oauth/v2/authorize?${querystring.stringify(
@@ -98,10 +114,21 @@ app.get("/auth/slack", (req, res) => {
 });
 
 app.get("/auth/slack/callback", async (req, res) => {
+  console.log("Received callback with:", {
+    query: req.query,
+    cookies: req.cookies,
+    headers: req.headers,
+  });
   const { code, state } = req.query;
   const storedState = req.cookies.slack_auth_state;
+  console.log(storedState);
 
   if (!storedState || storedState !== state) {
+    console.error("State validation failed", {
+      expected: storedState,
+      received: state,
+      cookies: req.cookies,
+    });
     return res.status(400).send("Invalid state parameter");
   }
 
