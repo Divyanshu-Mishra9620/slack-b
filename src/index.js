@@ -51,6 +51,13 @@ app.use(
       "Cache-Control",
       "Accept",
       "X-Requested-With",
+      "Pragma",
+    ],
+    headers: [
+      "Access-Control-Allow-Credentials",
+      "true",
+      "Access-Control-Allow-Origin",
+      "https://slack-f.vercel.app",
     ],
     exposedHeaders: ["set-cookie"],
   })
@@ -69,18 +76,6 @@ app.get("/health", (req, res) => {
 });
 
 app.options("*", cors());
-
-app.get("/auth/debug", (req, res) => {
-  res.json({
-    cookies: req.cookies,
-    headers: req.headers,
-    env: {
-      CLIENT_ID: !!CLIENT_ID,
-      REDIRECT_URI: SLACK_REDIRECT_URI,
-      FRONTEND_URI: FRONTEND_URI,
-    },
-  });
-});
 
 app.get("/auth/status", async (req, res) => {
   const token = req.cookies.slack_access_token;
