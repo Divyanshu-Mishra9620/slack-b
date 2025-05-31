@@ -5,10 +5,9 @@ const envFile =
   process.env.NODE_ENV === "production" ? ".env.production" : ".env.local";
 dotenv.config({ path: envFile });
 
-const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
-
-export const sendMessage = async (channel, text, postAt) => {
+export const sendMessage = async (channel, text, postAt, token) => {
   try {
+    const slack = new WebClient(token);
     const timestamp = postAt ? Number(postAt) : null;
 
     if (timestamp) {
@@ -42,8 +41,9 @@ export const sendMessage = async (channel, text, postAt) => {
   }
 };
 
-export const getMessages = async (params) => {
+export const getMessages = async (params, token) => {
   try {
+    const slack = new WebClient(token);
     const { channel, ts, oldest, latest } = params;
     const options = {
       channel,
@@ -75,7 +75,8 @@ export const getMessages = async (params) => {
   }
 };
 
-export const editMessage = async (channel, ts, text) => {
+export const editMessage = async (channel, ts, text, token) => {
+  const slack = new WebClient(token);
   try {
     return await slack.chat.update({
       channel,
@@ -88,7 +89,8 @@ export const editMessage = async (channel, ts, text) => {
   }
 };
 
-export const deleteMessage = async (channel, ts) => {
+export const deleteMessage = async (channel, ts, token) => {
+  const slack = new WebClient(token);
   try {
     return await slack.chat.delete({
       channel,

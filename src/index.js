@@ -2,6 +2,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import morgan from "morgan";
+import cookieParser from "cookie-parser";
+import querystring from "querystring";
+import axios from "axios";
 
 import {
   sendMessage,
@@ -9,17 +12,26 @@ import {
   editMessage,
   deleteMessage,
 } from "./slackClient.js";
-
-const app = express();
-const PORT = process.env.PORT || 5000;
+import { WebClient } from "@slack/web-api";
 
 const envFile =
   process.env.NODE_ENV === "production" ? ".env.production" : ".env.local";
 dotenv.config({ path: envFile });
 
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+const CLIENT_ID = process.env.SLACK_CLIENT_ID;
+const CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
+const REDIRECT_URI = process.env.SLACK_REDIRECT_URI;
+const FRONTEND_URI = process.env.VITE_FRONTEND_URI;
+const SCOPE = "chat:write,chat:write.public,channels:history,groups:history";
+
+app.use(cookieParser());
+
 app.use(
   cors({
-    origin: process.env.VITE_API_URL || "*",
+    origin: FRONTEND_URI || "http://localhost:5173",
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Origin"],
@@ -27,6 +39,96 @@ app.use(
 );
 
 app.options("*", cors());
+
+app.get("/auth/status", async (req, res) => {
+  const token = req.cookies.slack_access_token;
+
+  if (!token) {
+    return res.json({ authenticated: false });
+  }
+
+  try {
+    const slack = new WebClient(token);
+    const response = await slack.auth.test();
+
+    res.json({
+      authenticated: true,
+      user: {
+        id: response.user_id,
+        name: response.user,
+        team: response.team,
+        image: `https://avatars.slack-edge.com/${response.user_id}`,
+      },
+    });
+  } catch (error) {
+    res.clearCookie("slack_access_token");
+    res.json({ authenticated: false });
+  }
+});
+
+app.get("/auth/slack", (req, res) => {
+  const state = Math.random().toString(36).substring(7);
+  res.cookie("slack_auth_state", state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+  });
+
+  const authUrl = `https://slack.com/oauth/v2/authorize?${querystring.stringify(
+    {
+      client_id: CLIENT_ID,
+      scope: SCOPE,
+      redirect_uri: REDIRECT_URI,
+      state: state,
+      user_scope: "chat:write",
+    }
+  )}`;
+
+  res.redirect(authUrl);
+});
+
+app.get("/auth/slack/callback", async (req, res) => {
+  const { code, state } = req.query;
+  const storedState = req.cookies.slack_auth_state;
+
+  if (!storedState || storedState !== state) {
+    return res.status(400).send("Invalid state parameter");
+  }
+
+  try {
+    const response = await axios.post(
+      "https://slack.com/api/oauth.v2.access",
+      querystring.stringify({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        code,
+        redirect_uri: REDIRECT_URI,
+      }),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
+
+    const { access_token, authed_user } = response.data;
+    res.cookie("slack_access_token", access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+    });
+
+    // Redirect to frontend with success message
+    res.redirect(`${FRONTEND_URI}/?auth_success=1`);
+  } catch (error) {
+    console.error("OAuth Error:", error.response?.data || error.message);
+    res.redirect(`${FRONTEND_URI}/?auth_error=1`);
+  }
+});
+
+app.get("/auth/logout", (req, res) => {
+  res.clearCookie("slack_access_token");
+  res.redirect(`${FRONTEND_URI}/?logout_success=1`);
+});
 
 app.use(
   morgan(":method :url :status :res[content-length] - :response-time ms")
@@ -43,6 +145,7 @@ app.use((req, res, next) => {
 
 app.post("/api/messages", async (req, res) => {
   try {
+    const token = req.cookies.slack_access_token || process.env.SLACK_BOT_TOKEN;
     const { channel, text, postAt } = req.body;
 
     if (!channel) throw new Error("Missing channel ID");
@@ -51,7 +154,7 @@ app.post("/api/messages", async (req, res) => {
 
     const timestamp = postAt ? Number(postAt) : null;
 
-    const result = await sendMessage(channel, text, timestamp);
+    const result = await sendMessage(channel, text, timestamp, token);
     res.json(result);
   } catch (error) {
     console.error("API Error:", {
@@ -68,6 +171,7 @@ app.post("/api/messages", async (req, res) => {
 
 app.get("/api/messages", async (req, res) => {
   try {
+    const token = req.cookies.slack_access_token || process.env.SLACK_BOT_TOKEN;
     const { channel, ts, oldest, latest } = req.query;
 
     if (!channel) throw new Error("Channel is required");
@@ -82,7 +186,7 @@ app.get("/api/messages", async (req, res) => {
       latest: latest ? parseFloat(latest) : undefined,
     };
 
-    const result = await getMessages(params);
+    const result = await getMessages(params, token);
     res.json(result);
   } catch (error) {
     console.error("Retrieve Error:", error);
@@ -95,13 +199,14 @@ app.get("/api/messages", async (req, res) => {
 
 app.put("/api/messages", async (req, res) => {
   try {
+    const token = req.cookies.slack_access_token || process.env.SLACK_BOT_TOKEN;
     const { channel, ts, text } = req.body;
 
     if (!channel || !ts || !text) {
       throw new Error("All fields are required");
     }
 
-    const result = await editMessage(channel, ts, text);
+    const result = await editMessage(channel, ts, text, token);
     res.json(result);
   } catch (error) {
     console.error("Edit Error:", error);
@@ -114,13 +219,14 @@ app.put("/api/messages", async (req, res) => {
 
 app.delete("/api/messages", async (req, res) => {
   try {
+    const token = req.cookies.slack_access_token || process.env.SLACK_BOT_TOKEN;
     const { channel, ts } = req.body;
 
     if (!channel || !ts) {
       throw new Error("Channel and timestamp are required");
     }
 
-    const result = await deleteMessage(channel, ts);
+    const result = await deleteMessage(channel, ts, token);
     res.json(result);
   } catch (error) {
     console.error("Delete Error:", error);
