@@ -26,6 +26,7 @@ const CLIENT_ID = process.env.SLACK_CLIENT_ID;
 const CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
 const REDIRECT_URI = process.env.SLACK_REDIRECT_URI;
 const FRONTEND_URI = process.env.VITE_FRONTEND_URI;
+const NODE_ENV = process.env.NODE_ENV;
 
 const SCOPE =
   "chat:write,chat:write.public,channels:history,groups:history,users:read";
@@ -39,7 +40,7 @@ app.use(
         "http://localhost:5173",
         "https://slack-f.vercel.app",
         "https://slack-b.onrender.com",
-        "https://e69d-2406-b400-66-539-64b5-a596-8711-9b26.ngrok-free.app/auth/slack/callback",
+        "https://e69d-2406-b400-66-539-64b5-a596-8711-9b26.ngrok-free.app",
         /\.ngrok-free\.app$/,
       ];
 
@@ -51,7 +52,7 @@ app.use(
             : allowed.test(origin)
         )
       ) {
-        callback(null, origin); // Return the specific origin instead of true
+        callback(null, origin);
       } else {
         callback(new Error("Not allowed by CORS"));
       }
@@ -83,14 +84,13 @@ app.get("/health", (req, res) => {
   });
 });
 
-const cookieDomain =
-  process.env.NODE_ENV === "production" ? ".onrender.com" : undefined;
+const cookieDomain = NODE_ENV === "production" ? ".onrender.com" : undefined;
 
 app.get("/debug/cookies", (req, res) => {
   res.json({
     cookies: req.cookies,
     headers: req.headers,
-    env: process.env.NODE_ENV,
+    env: NODE_ENV,
     domain: cookieDomain,
     secure: req.secure,
   });
@@ -200,8 +200,8 @@ app.get("/auth/refresh", async (req, res) => {
 const getCookieOptions = (req) => ({
   httpOnly: true,
   secure: req.secure || req.headers["x-forwarded-proto"] === "https",
-  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-  domain: process.env.NODE_ENV === "production" ? ".onrender.com" : undefined,
+  sameSite: NODE_ENV === "production" ? "none" : "lax",
+  domain: NODE_ENV === "production" ? ".onrender.com" : undefined,
   path: "/",
   maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
 });
@@ -286,33 +286,27 @@ app.get("/cookie-test", (req, res) => {
   res.json({
     cookiesReceived: req.cookies,
     headers: req.headers["cookie"],
-    env: process.env.NODE_ENV,
+    env: NODE_ENV,
   });
 });
 
 app.get("/env-check", (req, res) => {
   res.json({
-    env: process.env.NODE_ENV,
+    env: NODE_ENV,
     cookieDomain:
-      process.env.NODE_ENV === "production"
-        ? "slack-b.onrender.com"
-        : "localhost",
-    frontendUrl: process.env.VITE_FRONTEND_URI,
+      NODE_ENV === "production" ? "slack-b.onrender.com" : "localhost",
+    frontendUrl: FRONTEND_URI,
     usingHttps: req.secure,
   });
 });
 
 app.get("/auth/logout", (req, res) => {
   res.clearCookie("slack_access_token", {
-    domain:
-      process.env.NODE_ENV === "production"
-        ? "slack-b.onrender.com"
-        : undefined,
+    domain: NODE_ENV === "production" ? "slack-b.onrender.com" : undefined,
     path: "/",
   });
   res.clearCookie("slack_auth_visible", {
-    domain:
-      process.env.NODE_ENV === "production" ? "slack-f.vercel.app" : undefined,
+    domain: NODE_ENV === "production" ? "slack-f.vercel.app" : undefined,
     path: "/",
   });
   res.json({ success: true });
@@ -333,7 +327,7 @@ app.use((req, res, next) => {
 
 app.post("/api/messages", async (req, res) => {
   try {
-    const token = req.cookies.slack_access_token || process.env.SLACK_BOT_TOKEN;
+    const token = req.cookies.slack_access_token || SLACK_BOT_TOKEN;
     const { channel, text, postAt } = req.body;
 
     if (!channel) throw new Error("Missing channel ID");
@@ -359,7 +353,7 @@ app.post("/api/messages", async (req, res) => {
 
 app.get("/api/messages", async (req, res) => {
   try {
-    const token = req.cookies.slack_access_token || process.env.SLACK_BOT_TOKEN;
+    const token = req.cookies.slack_access_token || SLACK_BOT_TOKEN;
     const { channel, ts, oldest, latest } = req.query;
 
     if (!channel) throw new Error("Channel is required");
@@ -387,7 +381,7 @@ app.get("/api/messages", async (req, res) => {
 
 app.put("/api/messages", async (req, res) => {
   try {
-    const token = req.cookies.slack_access_token || process.env.SLACK_BOT_TOKEN;
+    const token = req.cookies.slack_access_token || SLACK_BOT_TOKEN;
     const { channel, ts, text } = req.body;
 
     if (!channel || !ts || !text) {
@@ -407,7 +401,7 @@ app.put("/api/messages", async (req, res) => {
 
 app.delete("/api/messages", async (req, res) => {
   try {
-    const token = req.cookies.slack_access_token || process.env.SLACK_BOT_TOKEN;
+    const token = req.cookies.slack_access_token || SLACK_BOT_TOKEN;
     const { channel, ts } = req.body;
 
     if (!channel || !ts) {
