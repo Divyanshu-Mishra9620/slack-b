@@ -5,6 +5,8 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import querystring from "querystring";
 import axios from "axios";
+import Token from "./models/Token.js";
+import crypto from "crypto";
 
 import {
   sendMessage,
@@ -13,6 +15,9 @@ import {
   deleteMessage,
 } from "./slackClient.js";
 import { WebClient } from "@slack/web-api";
+import mongoose from "mongoose";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const envFile =
   process.env.NODE_ENV === "production" ? ".env.production" : ".env.local";
@@ -27,6 +32,16 @@ const CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
 const REDIRECT_URI = process.env.SLACK_REDIRECT_URI;
 const FRONTEND_URI = process.env.VITE_FRONTEND_URI;
 const NODE_ENV = process.env.NODE_ENV;
+const MONGO_URI = process.env.MONGO_DB_URI;
+
+mongoose.connect(MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+mongoose.connection.on("connected", () => console.log("MongoDB connected ✅"));
+mongoose.connection.on("error", (err) => {
+  console.error("MongoDB connection error:", err);
+});
 
 const SCOPE =
   "chat:write,chat:write.public,channels:history,groups:history,users:read";
@@ -40,7 +55,7 @@ app.use(
         "http://localhost:5173",
         "https://slack-f.vercel.app",
         "https://slack-b.onrender.com",
-        "https://e69d-2406-b400-66-539-64b5-a596-8711-9b26.ngrok-free.app",
+        "https://e0b4-2406-b400-66-2df1-8cb0-c840-8d6d-40e4.ngrok-free.app",
         /\.ngrok-free\.app$/,
       ];
 
@@ -70,60 +85,72 @@ app.use(
     exposedHeaders: ["set-cookie"],
   })
 );
+app.use(express.json());
 app.options("*", cors());
+app.use(
+  morgan(":method :url :status :res[content-length] - :response-time ms")
+);
 
-app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    cookies: req.cookies,
-    env: {
-      NODE_ENV: NODE_ENV,
-      CLIENT_ID: !!CLIENT_ID,
-      REDIRECT_URI: REDIRECT_URI,
-    },
-  });
-});
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const cookieDomain = NODE_ENV === "production" ? ".onrender.com" : undefined;
-
-app.get("/debug/cookies", (req, res) => {
-  res.json({
-    cookies: req.cookies,
-    headers: req.headers,
-    env: NODE_ENV,
-    domain: cookieDomain,
-    secure: req.secure,
-  });
-});
-
-app.get("/debug/auth-state", (req, res) => {
-  res.json({
-    authStateCookie: req.cookies.slack_auth_state,
-    accessTokenCookie: req.cookies.slack_access_token,
-    cookieHeaders: req.headers.cookie,
-  });
-});
+app.use(
+  "/favicon.ico",
+  express.static(path.join(__dirname, "public/favicon.ico"))
+);
 
 app.get("/auth/status", async (req, res) => {
-  const token = req.cookies.slack_access_token;
+  const userId = req.query.userId;
 
-  if (!token) {
-    console.log("No token found");
-
-    return res.json({ authenticated: false });
+  if (!userId) {
+    console.log("No userId provided");
+    return res.status(400).json({
+      authenticated: false,
+      error: "Missing userId",
+      details: "No userId parameter provided in request",
+    });
   }
 
   try {
-    const slack = new WebClient(token);
-    const authTest = await slack.auth.test();
-    console.log("Auth test success:", authTest);
-    if (!authTest.ok) {
-      throw new Error("Slack API returned invalid auth");
+    console.log(`Checking auth status for user: ${userId}`);
+    const tokenEntry = await Token.findOne({ userId });
+
+    if (!tokenEntry) {
+      console.log(`No token entry found for user: ${userId}`);
+      return res.json({
+        authenticated: false,
+        error: "No token found",
+        details: "No token record exists for this user",
+      });
     }
+
+    if (!tokenEntry.accessToken) {
+      console.log(`Empty access token for user: ${userId}`);
+      return res.json({
+        authenticated: false,
+        error: "Invalid token",
+        details: "Token record exists but accessToken is empty",
+      });
+    }
+
+    console.log(`Found token for user: ${userId}, verifying with Slack...`);
+    const slack = new WebClient(tokenEntry.accessToken);
+    const authTest = await slack.auth.test();
+
+    console.log("Slack auth test response:", authTest);
+
+    if (!authTest.ok) {
+      console.error("Slack auth test failed:", authTest.error);
+      return res.json({
+        authenticated: false,
+        error: "Slack API authentication failed",
+        details: authTest.error,
+      });
+    }
+
     const userInfo = await slack.users.info({
       user: authTest.user_id,
     });
-    console.log("User info:", userInfo.user);
 
     res.json({
       authenticated: true,
@@ -140,92 +167,44 @@ app.get("/auth/status", async (req, res) => {
   } catch (error) {
     console.error("Token validation failed:", {
       error: error.message,
-      data: error.data,
       stack: error.stack,
+      response: error.response?.data,
     });
 
-    res.clearCookie("slack_access_token", {
-      domain: cookieDomain,
-      path: "/",
+    res.status(500).json({
+      authenticated: false,
+      error: "Token validation failed",
+      details: error.message,
     });
-
-    res.json({ authenticated: false });
   }
 });
 
 app.get("/auth/slack", (req, res) => {
-  const state = Math.random().toString(36).substring(7);
-  res.cookie("slack_auth_state", state, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "none",
-    domain: cookieDomain,
-    maxAge: 60000,
-    path: "/",
-  });
-
-  const authUrl = `https://slack.com/oauth/v2/authorize?${querystring.stringify(
-    {
-      client_id: CLIENT_ID,
-      scope: SCOPE,
-      redirect_uri: REDIRECT_URI,
-      state: state,
-      user_scope: "",
-    }
-  )}`;
-  res.redirect(authUrl);
-});
-
-app.get("/auth/refresh", async (req, res) => {
-  const token = req.cookies.slack_access_token;
-  console.log(token);
-
-  if (!token) return res.status(401).json({ error: "No token" });
-
   try {
-    const slack = new WebClient(token);
-    const authTest = await slack.auth.test();
+    const state = crypto.randomBytes(16).toString("hex");
 
-    res.json({
-      token,
-      user: {
-        id: authTest.user_id,
-        team: authTest.team,
-      },
-    });
+    const authUrl = `https://slack.com/oauth/v2/authorize?${querystring.stringify(
+      {
+        client_id: CLIENT_ID,
+        scope: SCOPE,
+        redirect_uri: REDIRECT_URI,
+        state: state,
+        user_scope: "",
+      }
+    )}`;
+
+    res.redirect(authUrl);
   } catch (error) {
-    res.status(401).json({ error: "Token refresh failed" });
+    console.error("Slack OAuth redirect error:", error);
+    res.status(500).send("OAuth redirect error");
   }
-});
-const getCookieOptions = (req) => ({
-  httpOnly: true,
-  secure: req.secure || req.headers["x-forwarded-proto"] === "https",
-  sameSite: NODE_ENV === "production" ? "none" : "lax",
-  domain: NODE_ENV === "production" ? ".onrender.com" : undefined,
-  path: "/",
-  maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
 });
 
 app.get("/auth/slack/callback", async (req, res) => {
-  const { code, state, error } = req.query;
-  console.log(code, state);
+  const { code, state } = req.query;
 
-  if (error) {
-    console.error("Slack OAuth error:", error);
-    return res.redirect(`${FRONTEND_URI}/?auth_error=1&slack_error=${error}`);
-  }
-
-  if (
-    !state ||
-    !req.cookies.slack_auth_state ||
-    state !== req.cookies.slack_auth_state
-  ) {
-    console.error("State mismatch", {
-      received: state,
-      expected: req.cookies.slack_auth_state,
-      cookies: req.cookies,
-    });
-    return res.redirect(`${FRONTEND_URI}/?auth_error=1&reason=state_mismatch`);
+  if (!code) {
+    return res.redirect(`${FRONTEND_URI}/?auth_error=missing_code`);
   }
 
   try {
@@ -237,92 +216,60 @@ app.get("/auth/slack/callback", async (req, res) => {
         code,
         redirect_uri: REDIRECT_URI,
       }),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+      {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      }
     );
-    if (!response.data.ok) {
-      console.error("Slack API Error:", response.data.error);
-      return res.redirect(
-        `${FRONTEND_URI}/?auth_error=1&reason=${encodeURIComponent(
-          response.data.error || "slack_api_error"
-        )}`
-      );
+
+    const { access_token, authed_user, team } = response.data;
+
+    if (!response.data.ok || !access_token || !authed_user || !team) {
+      return res.redirect(`${FRONTEND_URI}/?auth_error=invalid_response`);
     }
 
-    console.log(
-      "Slack OAuth response:",
-      JSON.stringify(response.data, null, 2)
+    await Token.findOneAndUpdate(
+      { userId: authed_user.id, teamId: team.id },
+      { accessToken: access_token },
+      { upsert: true, new: true }
     );
 
-    const cookieOptions = getCookieOptions(req);
-
-    console.log(cookieOptions);
-
-    res.cookie("slack_access_token", response.data.access_token, cookieOptions);
-
-    res.clearCookie("slack_auth_state", {
-      httpOnly: true,
-      secure: cookieOptions.secure,
-      sameSite: cookieOptions.sameSite,
-      domain: cookieOptions.domain,
-      path: "/",
-    });
-
-    res.redirect(`${FRONTEND_URI}/?auth_success=1`);
+    res.redirect(`${FRONTEND_URI}/?auth_success=1&user_id=${authed_user.id}`);
   } catch (error) {
-    console.error("Full OAuth Error:", {
-      message: error.message,
-      response: error.response?.data,
-      stack: error.stack,
-    });
-    res.redirect(
-      `${FRONTEND_URI}/?auth_error=1&reason=${encodeURIComponent(
-        error.response?.data?.error || "unknown"
-      )}`
+    console.error(
+      "Slack Auth Callback Error:",
+      error.response?.data || error.message
     );
+    res.redirect(`${FRONTEND_URI}/?auth_error=server_error`);
   }
 });
 
-app.get("/cookie-test", (req, res) => {
-  res.json({
-    cookiesReceived: req.cookies,
-    headers: req.headers["cookie"],
-    env: NODE_ENV,
-  });
+app.get("/slack/token/:userId", async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const tokenEntry = await Token.findOne({ userId });
+    if (!tokenEntry) return res.status(404).json({ error: "Token not found" });
+
+    res.json({ accessToken: tokenEntry.accessToken });
+  } catch (error) {
+    console.error("Token Fetch Error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-app.get("/env-check", (req, res) => {
-  res.json({
-    env: NODE_ENV,
-    cookieDomain:
-      NODE_ENV === "production" ? "slack-b.onrender.com" : "localhost",
-    frontendUrl: FRONTEND_URI,
-    usingHttps: req.secure,
-  });
-});
+app.delete("/logout/:userId", async (req, res) => {
+  const { userId } = req.params;
 
-app.get("/auth/logout", (req, res) => {
-  res.clearCookie("slack_access_token", {
-    domain: NODE_ENV === "production" ? "slack-b.onrender.com" : undefined,
-    path: "/",
-  });
-  res.clearCookie("slack_auth_visible", {
-    domain: NODE_ENV === "production" ? "slack-f.vercel.app" : undefined,
-    path: "/",
-  });
-  res.json({ success: true });
-});
+  try {
+    const result = await Token.findOneAndDelete({ userId });
+    if (!result)
+      return res.status(404).json({ message: "No session found for user" });
 
-app.use(
-  morgan(":method :url :status :res[content-length] - :response-time ms")
-);
-
-app.use(express.json());
-
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  console.log("Headers:", req.headers);
-  console.log("Body:", req.body);
-  next();
+    res.json({ message: "User logged out successfully" });
+  } catch (error) {
+    console.error("Logout Error:", error);
+    res.status(500).json({ error: "Logout failed" });
+  }
 });
 
 app.post("/api/messages", async (req, res) => {
