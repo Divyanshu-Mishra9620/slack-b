@@ -21,9 +21,10 @@ dotenv.config({ path: envFile });
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const CLIENT_ID = process.env.SLACK_CLIENT_ID;
 const CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
-const SLACK_REDIRECT_URI = process.env.SLACK_REDIRECT_URI;
+const REDIRECT_URI = process.env.SLACK_REDIRECT_URI;
 const FRONTEND_URI = process.env.VITE_FRONTEND_URI;
 
 const SCOPE =
@@ -31,13 +32,26 @@ const SCOPE =
 
 app.use(cookieParser());
 
-const allowedOrigins = ["http://localhost:5173", "https://slack-f.vercel.app"];
-
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
+      const allowedOrigins = [
+        "http://localhost:5173",
+        "https://slack-f.vercel.app",
+        "https://slack-b.onrender.com",
+        "https://e69d-2406-b400-66-539-64b5-a596-8711-9b26.ngrok-free.app/auth/slack/callback",
+        /\.ngrok-free\.app$/,
+      ];
+
+      if (
+        !origin ||
+        allowedOrigins.some((allowed) =>
+          typeof allowed === "string"
+            ? origin === allowed
+            : allowed.test(origin)
+        )
+      ) {
+        callback(null, origin); // Return the specific origin instead of true
       } else {
         callback(new Error("Not allowed by CORS"));
       }
@@ -55,6 +69,7 @@ app.use(
     exposedHeaders: ["set-cookie"],
   })
 );
+app.options("*", cors());
 
 app.get("/health", (req, res) => {
   res.json({
@@ -63,12 +78,31 @@ app.get("/health", (req, res) => {
     env: {
       NODE_ENV: NODE_ENV,
       CLIENT_ID: !!CLIENT_ID,
-      REDIRECT_URI: SLACK_REDIRECT_URI,
+      REDIRECT_URI: REDIRECT_URI,
     },
   });
 });
 
-app.options("*", cors());
+const cookieDomain =
+  process.env.NODE_ENV === "production" ? ".onrender.com" : undefined;
+
+app.get("/debug/cookies", (req, res) => {
+  res.json({
+    cookies: req.cookies,
+    headers: req.headers,
+    env: process.env.NODE_ENV,
+    domain: cookieDomain,
+    secure: req.secure,
+  });
+});
+
+app.get("/debug/auth-state", (req, res) => {
+  res.json({
+    authStateCookie: req.cookies.slack_auth_state,
+    accessTokenCookie: req.cookies.slack_access_token,
+    cookieHeaders: req.headers.cookie,
+  });
+});
 
 app.get("/auth/status", async (req, res) => {
   const token = req.cookies.slack_access_token;
@@ -111,7 +145,7 @@ app.get("/auth/status", async (req, res) => {
     });
 
     res.clearCookie("slack_access_token", {
-      domain: "slack-b.onrender.com",
+      domain: cookieDomain,
       path: "/",
     });
 
@@ -125,7 +159,7 @@ app.get("/auth/slack", (req, res) => {
     httpOnly: true,
     secure: true,
     sameSite: "none",
-    domain: "slack-b.onrender.com",
+    domain: cookieDomain,
     maxAge: 60000,
     path: "/",
   });
@@ -134,7 +168,7 @@ app.get("/auth/slack", (req, res) => {
     {
       client_id: CLIENT_ID,
       scope: SCOPE,
-      redirect_uri: SLACK_REDIRECT_URI,
+      redirect_uri: REDIRECT_URI,
       state: state,
       user_scope: "",
     }
@@ -144,6 +178,8 @@ app.get("/auth/slack", (req, res) => {
 
 app.get("/auth/refresh", async (req, res) => {
   const token = req.cookies.slack_access_token;
+  console.log(token);
+
   if (!token) return res.status(401).json({ error: "No token" });
 
   try {
@@ -161,9 +197,18 @@ app.get("/auth/refresh", async (req, res) => {
     res.status(401).json({ error: "Token refresh failed" });
   }
 });
+const getCookieOptions = (req) => ({
+  httpOnly: true,
+  secure: req.secure || req.headers["x-forwarded-proto"] === "https",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  domain: process.env.NODE_ENV === "production" ? ".onrender.com" : undefined,
+  path: "/",
+  maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+});
 
 app.get("/auth/slack/callback", async (req, res) => {
   const { code, state, error } = req.query;
+  console.log(code, state);
 
   if (error) {
     console.error("Slack OAuth error:", error);
@@ -190,7 +235,7 @@ app.get("/auth/slack/callback", async (req, res) => {
         client_id: CLIENT_ID,
         client_secret: CLIENT_SECRET,
         code,
-        redirect_uri: SLACK_REDIRECT_URI,
+        redirect_uri: REDIRECT_URI,
       }),
       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
@@ -208,27 +253,18 @@ app.get("/auth/slack/callback", async (req, res) => {
       JSON.stringify(response.data, null, 2)
     );
 
-    if (!response.data.ok) {
-      throw new Error(response.data.error || "Slack API error");
-    }
+    const cookieOptions = getCookieOptions(req);
 
-    const accessTokenCookieOptions = {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "none",
-      path: "/",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    };
+    console.log(cookieOptions);
 
-    res.cookie(
-      "slack_access_token",
-      response.data.access_token,
-      accessTokenCookieOptions
-    );
+    res.cookie("slack_access_token", response.data.access_token, cookieOptions);
 
     res.clearCookie("slack_auth_state", {
-      ...accessTokenCookieOptions,
       httpOnly: true,
+      secure: cookieOptions.secure,
+      sameSite: cookieOptions.sameSite,
+      domain: cookieOptions.domain,
+      path: "/",
     });
 
     res.redirect(`${FRONTEND_URI}/?auth_success=1`);
@@ -397,7 +433,5 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`⏰ Current server time: ${new Date().toISOString()}`);
-  console.log(
-    `🔒 Slack token: ${process.env.SLACK_BOT_TOKEN ? "Exists" : "Missing!"}`
-  );
+  console.log(`🔒 Slack token: ${SLACK_BOT_TOKEN ? "Exists" : "Missing!"}`);
 });
